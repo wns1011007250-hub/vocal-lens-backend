@@ -1,3 +1,5 @@
+import base64
+import binascii
 import json
 import os
 import shutil
@@ -14,6 +16,17 @@ import soundfile as sf
 
 MAX_BYTES = 30 * 1024 * 1024
 MAX_SECONDS = 8 * 60
+
+
+def write_uploaded_audio(value: str, target: Path) -> None:
+    encoded = value.split(",", 1)[1] if value.startswith("data:") and "," in value else value
+    try:
+        raw = base64.b64decode(encoded, validate=True)
+    except (binascii.Error, ValueError) as exc:
+        raise ValueError("input.audio_base64 is not valid base64 audio") from exc
+    if len(raw) > MAX_BYTES:
+        raise ValueError("Uploaded audio is larger than 30 MB")
+    target.write_bytes(raw)
 
 
 def download_audio(url: str, target: Path) -> None:
@@ -113,13 +126,17 @@ def analyze(wav_path: Path) -> dict:
 def handler(job: dict) -> dict:
     data = job.get("input") or {}
     audio_url = data.get("audio_url")
-    if not audio_url or not audio_url.startswith(("https://", "http://")):
-        return {"error": "input.audio_url must be an http(s) URL"}
+    audio_base64 = data.get("audio_base64")
+    if not audio_base64 and (not audio_url or not audio_url.startswith(("https://", "http://"))):
+        return {"error": "Provide input.audio_base64 or an http(s) input.audio_url"}
     workdir = Path(tempfile.mkdtemp(prefix="vocal-lens-"))
     try:
         source = workdir / "source.audio"
         wav = workdir / "audio.wav"
-        download_audio(audio_url, source)
+        if audio_base64:
+            write_uploaded_audio(audio_base64, source)
+        else:
+            download_audio(audio_url, source)
         to_wav(source, wav)
         return {"ok": True, "analysis": analyze(wav)}
     except Exception as exc:
